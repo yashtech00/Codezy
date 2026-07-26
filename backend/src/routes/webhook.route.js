@@ -19,7 +19,7 @@ router.post('/github', verifySignature, async (req, res) => {
   res.status(200).send('OK');
 
   if (eventType !== 'pull_request') return;
-  if (!['opened', 'synchronize'].includes(payload.action)) return;
+  if (!['opened', 'synchronize', 'reopened'].includes(payload.action)) return;
 
   const repoFullName = payload.repository.full_name;
   const prNumber = payload.pull_request.number;

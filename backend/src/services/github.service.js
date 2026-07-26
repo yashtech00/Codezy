@@ -5,28 +5,33 @@ const path = require('path');
 const config = require('../config/env');
 
 function getOctokit(installationId) {
-  // Check if private key file exists
   let privateKey = '';
   const keyPath = path.resolve(process.cwd(), config.github.privateKeyPath);
   if (fs.existsSync(keyPath)) {
     privateKey = fs.readFileSync(keyPath, 'utf8');
   }
 
-  if (privateKey && config.github.appId && installationId) {
+  const numericAppId = Number(config.github.appId);
+  const numericInstallationId = Number(installationId);
+
+  if (privateKey && numericAppId && numericInstallationId) {
     return new Octokit({
       authStrategy: createAppAuth,
       auth: {
-        appId: config.github.appId,
+        appId: numericAppId,
         privateKey,
-        installationId,
+        installationId: numericInstallationId,
       },
     });
   }
 
-  // Return unauthenticated or token-authenticated Octokit for testing fallback
-  return new Octokit({
-    auth: process.env.GITHUB_TOKEN || undefined,
-  });
+  if (process.env.GITHUB_TOKEN) {
+    return new Octokit({
+      auth: process.env.GITHUB_TOKEN,
+    });
+  }
+
+  return new Octokit();
 }
 
 async function fetchPrDiff(owner, repo, prNumber, installationId) {

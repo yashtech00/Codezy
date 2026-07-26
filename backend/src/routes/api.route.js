@@ -44,15 +44,19 @@ router.get('/reviews/:id', async (req, res) => {
 
 // POST /api/test-trigger - Manually trigger a mock PR review for dashboard demonstration
 router.post('/test-trigger', async (req, res) => {
-  const { repoFullName = 'owner/test-repo', prNumber = 42, headSha = 'abc1234' } = req.body;
+  const { repoFullName = 'yashtech00/Codezy', prNumber = 1, headSha = '492de6d' } = req.body;
 
   try {
+    const existingInstallation = await prisma.installation.findFirst();
+    const installationId = existingInstallation ? existingInstallation.githubInstallationId : null;
+
     const reviewRecord = await prisma.prReview.create({
       data: {
         prNumber: Number(prNumber),
         repoFullName,
         headSha,
         status: 'QUEUED',
+        installationId: existingInstallation?.id || null,
       },
     });
 
@@ -60,7 +64,7 @@ router.post('/test-trigger', async (req, res) => {
       reviewId: reviewRecord.id,
       repoFullName,
       prNumber: Number(prNumber),
-      installationId: 1001,
+      installationId,
       headSha,
     });
 

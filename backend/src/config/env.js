@@ -27,4 +27,7 @@ module.exports = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY || '',
   },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '',
+  },
 };
