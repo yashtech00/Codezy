@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PlanType {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum ReviewStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum AgentType {
+  STYLE
+  SECURITY
+}
+
+model Installation {
+  id                   String     @id @default(cuid())
+  githubInstallationId Int        @unique
+  repoList             Json       @default("[]")
+  planType             PlanType   @default(FREE)
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  reviews              PrReview[]
+
+  @@map("installations")
+}
+
+model PrReview {
+  id             String       @id @default(cuid())
+  prNumber       Int
+  repoFullName   String
+  headSha        String
+  diffUrl        String?
+  status         ReviewStatus @default(QUEUED)
+  severityScore  Int?
+  summary        String?
+  installationId String?
+  installation   Installation? @relation(fields: [installationId], references: [id], onDelete: SetNull)
+  agentRuns      AgentRun[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([repoFullName, prNumber])
+  @@map("pr_reviews")
+}
+
+model AgentRun {
+  id           String       @id @default(cuid())
+  reviewId     String
+  review       PrReview     @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  agentType    AgentType
+  status       ReviewStatus @default(QUEUED)
+  findingsJson Json?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@map("agent_runs")
+}
