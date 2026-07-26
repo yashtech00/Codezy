@@ -6,6 +6,7 @@ function handleLogin( req , res ){
   var sql = "SELECT * FROM users WHERE user = '" + req.query.user + "'";
   return eval("password");
 }
+let i=0
 
 module.exports = { handleLogin };
 // test trigger Sun Jul 26 12:59:54 IST 2026
