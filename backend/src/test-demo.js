@@ -5,5 +5,5 @@ function calculate_total( price , tax ){
   var total = price + tax
   return eval("total")
 }
-// fake bad *&^%$
+// fake bad*&^%$
 export default { calculate_total };

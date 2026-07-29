@@ -23,13 +23,41 @@ enum ReviewStatus {
 enum AgentType {
   STYLE
   SECURITY
+  LOGIC
+  PERFORMANCE
+  TESTING
+  GIT_HYGIENE
+  JUDGE
 }
+
+model User {
+  id                    String         @id @default(cuid())
+  githubId              Int            @unique
+  username              String
+  name                  String?
+  email                 String?
+  avatarUrl             String?
+  accessToken           String?
+  refreshToken          String?
+  refreshTokenExpiresAt DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  installations         Installation[]
+
+  @@map("users")
+}
+
 
 model Installation {
   id                   String     @id @default(cuid())
   githubInstallationId Int        @unique
+  accountUsername      String?
+  accountType          String?    @default("User")
+  status               String     @default("ACTIVE")
   repoList             Json       @default("[]")
   planType             PlanType   @default(FREE)
+  userId               String?
+  user                 User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt            DateTime   @default(now())
   updatedAt            DateTime   @updatedAt
   reviews              PrReview[]
@@ -44,8 +72,10 @@ model PrReview {
   headSha        String
   diffUrl        String?
   status         ReviewStatus @default(QUEUED)
+  reviewCount    Int          @default(1)  // how many times this PR has been reviewed
   severityScore  Int?
   summary        String?
+  agentSummary   Json?
   installationId String?
   installation   Installation? @relation(fields: [installationId], references: [id], onDelete: SetNull)
   agentRuns      AgentRun[]

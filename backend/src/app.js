@@ -1,8 +1,9 @@
-const express = require('express');
-const cors = require('cors');
-const webhookRoute = require('./routes/webhook.route');
-const apiRoute = require('./routes/api.route');
-const config = require('./config/env');
+import express from 'express';
+import cors from 'cors';
+import webhookRoute from './routes/webhook.route.js';
+import apiRoute from './routes/api.route.js';
+import config from './config/env.js';
+import authRoute from './routes/auth.route.js';
 
 const app = express();
 
@@ -18,12 +19,15 @@ app.use(
 );
 app.use('/webhook', webhookRoute);
 
-// Standard JSON body parser for dashboard REST API routes
+// Standard JSON body parser for dashboard & auth REST API routes
 app.use(express.json());
+app.use('/api/auth', authRoute);
+app.use('/api', authRoute);
 app.use('/api', apiRoute);
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'AutoReview Backend API', timestamp: new Date().toISOString() });
 });
 
-module.exports = app;
+export default app;
+

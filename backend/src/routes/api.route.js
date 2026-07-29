@@ -1,6 +1,6 @@
-const express = require('express');
-const prisma = require('../config/db');
-const { addReviewJob } = require('../queue/reviewQueue');
+import express from 'express';
+import prisma from '../config/db.js';
+import { addReviewJob } from '../queue/reviewQueue.js';
 
 const router = express.Router();
 
@@ -75,4 +75,5 @@ router.post('/test-trigger', async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
+

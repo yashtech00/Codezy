@@ -1,7 +1,8 @@
-const config = require('../config/env');
+import config from '../config/env.js';
 
-module.exports = {
+export default {
   host: config.redis.host,
   port: config.redis.port,
   maxRetriesPerRequest: null,
 };
+

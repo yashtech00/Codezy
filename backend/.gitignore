@@ -4,3 +4,4 @@ keys/*.pem
 coverage/
 dist/
 *.log
+.DS_Store
