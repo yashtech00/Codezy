@@ -23,6 +23,11 @@ enum ReviewStatus {
 enum AgentType {
   STYLE
   SECURITY
+  LOGIC
+  PERFORMANCE
+  TESTING
+  GIT_HYGIENE
+  JUDGE
 }
 
 model Installation {
@@ -44,8 +49,10 @@ model PrReview {
   headSha        String
   diffUrl        String?
   status         ReviewStatus @default(QUEUED)
+  reviewCount    Int          @default(1)  // how many times this PR has been reviewed
   severityScore  Int?
   summary        String?
+  agentSummary   Json?
   installationId String?
   installation   Installation? @relation(fields: [installationId], references: [id], onDelete: SetNull)
   agentRuns      AgentRun[]

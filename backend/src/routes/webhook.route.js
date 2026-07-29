@@ -31,8 +31,16 @@ router.post('/github', verifySignature, async (req, res) => {
     return;
   }
 
-  if (!['opened', 'synchronize', 'reopened'].includes(payload.action)) {
-    console.log(`ℹ️ [Webhook Ignored] Action '${payload.action}' is not opened/synchronize/reopened.`);
+  if (!['opened', 'synchronize', 'reopened', 'ready_for_review'].includes(payload.action)) {
+    console.log(`ℹ️ [Webhook Ignored] Action '${payload.action}' is not a reviewable PR action.`);
+    return;
+  }
+
+  // ── Draft PR skip logic ──────────────────────────────────
+  // Skip draft PRs to avoid noisy reviews on work-in-progress.
+  // When a draft becomes ready for review (ready_for_review action), we DO process it.
+  if (payload.pull_request.draft === true && payload.action !== 'ready_for_review') {
+    console.log(`⏭️ [Webhook Skipped] PR #${payload.pull_request.number} is a DRAFT — skipping review. Will trigger when marked ready.`);
     return;
   }
 
@@ -60,7 +68,14 @@ router.post('/github', verifySignature, async (req, res) => {
       console.log(`💾 [Prisma DB] Updated installation record: ID=${installationRecord.id}`);
     }
 
-    // 2. Create PrReview record in Prisma DB
+    // 2. Create or update PrReview record in Prisma DB
+    // If this PR has been reviewed before, increment the counter.
+    const existingReview = await prisma.prReview.findFirst({
+      where: { repoFullName, prNumber },
+      orderBy: { createdAt: 'desc' },
+    });
+    const reviewCount = (existingReview?.reviewCount ?? 0) + 1;
+
     const reviewRecord = await prisma.prReview.create({
       data: {
         prNumber,
@@ -68,6 +83,7 @@ router.post('/github', verifySignature, async (req, res) => {
         headSha,
         diffUrl,
         status: 'QUEUED',
+        reviewCount,
         installationId: installationRecord?.id || null,
       },
     });
@@ -82,6 +98,7 @@ router.post('/github', verifySignature, async (req, res) => {
       installationId: installationId ? Number(installationId) : null,
       headSha,
       diffUrl,
+      reviewCount, // for comment footer
     });
 
     console.log(`📥 [BullMQ Enqueued] Job pushed for PR #${prNumber} (${repoFullName})`);
