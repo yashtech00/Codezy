@@ -34,10 +34,10 @@ export const MergeDecisionEnum = z.enum(['PASS', 'WARNING', 'ACTION_REQUIRED', '
 export const CandidateFindingSchema = z.object({
   source: z.enum(['AI', 'STATIC', 'DEPENDENCY_SCANNER']).default('AI'),
   sourceAgent: z.string(),
-  ruleId: z.string().optional(),
+  ruleId: z.string().nullable().optional(),
   category: FindingCategoryEnum,
-  title: z.string().min(3),
-  description: z.string().min(5),
+  title: z.string().min(1),
+  description: z.string().default('Finding description'),
   filePath: z.string().min(1),
   startLine: z.number().int().min(1),
   endLine: z.number().int().min(1),
@@ -45,12 +45,12 @@ export const CandidateFindingSchema = z.object({
   severity: FindingSeverityEnum,
   confidence: z.number().min(0).max(1).default(0.8),
   evidence: z.object({
-    changedCode: z.string(),
-    relatedContext: z.string().optional(),
-    reasoning: z.string(),
+    changedCode: z.string().default(''),
+    relatedContext: z.string().nullable().optional(),
+    reasoning: z.string().default('Evidence reasoning'),
   }),
-  impact: z.string(),
-  recommendation: z.string().optional(),
+  impact: z.string().default('Impact evaluation'),
+  recommendation: z.string().nullable().optional(),
 });
 
 export const VerifiedFindingSchema = CandidateFindingSchema.extend({
@@ -58,14 +58,14 @@ export const VerifiedFindingSchema = CandidateFindingSchema.extend({
   codeAnchor: z.string(),
   verificationStatus: VerificationStatusEnum,
   introducedByPr: z.boolean().default(true),
-  introductionReason: z.string().optional(),
+  introductionReason: z.string().nullable().optional(),
   adjustedConfidence: z.number().min(0).max(1),
   blockingEligible: z.boolean(),
   verificationEvidence: z.array(
     z.object({
       type: z.enum(['STATIC', 'CONTEXT', 'MODEL']),
       description: z.string(),
-      reference: z.string().optional(),
+      reference: z.string().nullable().optional(),
     })
   ).default([]),
 });

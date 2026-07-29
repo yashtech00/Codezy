@@ -100,7 +100,39 @@ const reviewWorker = new Worker(
     let rawFiles = await fetchPrDiff(owner, repo, prNumber, installationId);
     let files = preprocessDiff(rawFiles);
 
-    if (files.length === 0) {
+    if (files.length === 0 && !job.data.isTestTrigger) {
+      logger.info('No files found in PR diff', { owner, repo, prNumber });
+      const emptyComment = `## 🤖 Codezy Level 2 Review — PASS\n\n✅ **No code changes detected in this pull request.**\n\n*Automated review by Codezy Multi-Agent Engine.*`;
+      
+      if (owner && repo && prNumber) {
+        await postPrComment(owner, repo, prNumber, installationId, emptyComment).catch(() => {});
+      }
+
+      if (checkRun?.id) {
+        const octokit = getOctokit(installationId);
+        await octokit.rest.checks.update({
+          owner,
+          repo,
+          check_run_id: Number(checkRun.id),
+          status: 'completed',
+          conclusion: 'success',
+          output: {
+            title: 'Codezy Review — PASS',
+            summary: 'No code changes detected in this pull request.',
+          },
+        }).catch(() => {});
+      }
+
+      if (reviewId) {
+        await prisma.prReview.update({
+          where: { id: reviewId },
+          data: { status: 'COMPLETED', severityScore: 0, summary: 'No files in diff' },
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    if (files.length === 0 && job.data.isTestTrigger) {
       files = preprocessDiff(DEMO_FILES);
     }
 
@@ -375,6 +407,7 @@ const reviewWorker = new Worker(
       metrics,
       policyResult,
       delta,
+      existingCheckRunId: checkRun?.id ? Number(checkRun.id) : null,
     });
 
     // 8. Backward-compatible DB update for PrReview
