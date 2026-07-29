@@ -1,11 +1,11 @@
-require('./config/env');
-const http = require('http');
-const app = require('./app');
-const { initSocket } = require('./config/socket');
-const { port } = require('./config/env');
+import './config/env.js';
+import http from 'http';
+import app from './app.js';
+import { initSocket } from './config/socket.js';
+import { port } from './config/env.js';
 
 // Start BullMQ worker process
-require('./queue/reviewWorker');
+import Worker from './queue/reviewWorker.js';
 
 const server = http.createServer(app);
 

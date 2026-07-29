@@ -1,12 +1,12 @@
-const { Worker } = require('bullmq');
-const connection = require('./connection');
-const { QUEUE_NAME } = require('./reviewQueue');
-const prisma = require('../config/db');
-const { emitAgentStatus } = require('../config/socket');
-const { fetchPrDiff, postPrComment, createCheckRun, updateCheckRun } = require('../services/github.service');
-const { preprocessDiff, calculateDiffStats } = require('../services/diffPreprocessor');
-const { fetchRepoConfig, getEnabledCategories } = require('../services/repoConfig.service');
-const {
+import { Worker } from 'bullmq';
+import connection from './connection.js';
+import { QUEUE_NAME } from './reviewQueue.js';
+import prisma from '../config/db.js';
+import { emitAgentStatus } from '../config/socket.js';
+import { fetchPrDiff, postPrComment, createCheckRun, updateCheckRun } from '../services/github.service.js';
+import { preprocessDiff, calculateDiffStats } from '../services/diffPreprocessor.js';
+import { fetchRepoConfig, getEnabledCategories } from '../services/repoConfig.service.js';
+import {
   runSupervisorNode,
   runGitHygieneAgent,
   runStyleAgent,
@@ -17,7 +17,8 @@ const {
   runJudgeAgent,
   calculateSeverityScore,
   formatMarkdownComment,
-} = require('../agents/reviewAgents');
+} from '../agents/reviewAgents.js';
+
 
 // ────────────────────────────────────────────────────────────
 // Helper: Create an AgentRun record in Prisma
@@ -459,4 +460,5 @@ reviewWorker.on('failed', (job, err) => {
   }
 });
 
-module.exports = reviewWorker;
+export default reviewWorker;
+

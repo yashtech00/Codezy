@@ -1,5 +1,5 @@
-const { Server } = require('socket.io');
-const config = require('./env');
+import { Server } from 'socket.io';
+import config from './env.js';
 
 let io = null;
 
@@ -49,8 +49,9 @@ function emitAgentStatus(reviewId, agentData) {
   }
 }
 
-module.exports = {
+export {
   initSocket,
   getIO,
   emitAgentStatus,
 };
+

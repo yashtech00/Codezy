@@ -184,7 +184,7 @@ function calculateDiffStats(files) {
   };
 }
 
-module.exports = {
+export {
   shouldSkipFile,
   preprocessDiff,
   calculateDiffStats,
@@ -192,3 +192,4 @@ module.exports = {
   parsePatchHunks,
   classifyFile,
 };
+

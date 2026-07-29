@@ -17,8 +17,8 @@
  * If the file is absent or malformed, ALL types are enabled by default.
  */
 
-const yaml = require('js-yaml');
-const { getOctokit } = require('./github.service');
+import * as yaml from 'js-yaml';
+import { getOctokit } from './github.service.js';
 
 // ────────────────────────────────────────────────────────────
 // DEFAULT CONFIG — all agents enabled
@@ -128,9 +128,10 @@ function getEnabledCategories(repoConfig) {
   return resolved;
 }
 
-module.exports = {
+export {
   fetchRepoConfig,
   getEnabledCategories,
   DEFAULT_REPO_CONFIG,
   VALID_COMMENT_TYPES,
 };
+

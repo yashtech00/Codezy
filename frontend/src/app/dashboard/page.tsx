@@ -24,7 +24,7 @@ interface Review {
 
 async function getReviews(): Promise<Review[]> {
   try {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     const res = await fetch(`${apiUrl}/api/reviews`, { cache: 'no-store' });
     if (!res.ok) return [];
     const data = await res.json();

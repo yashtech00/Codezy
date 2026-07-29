@@ -30,11 +30,34 @@ enum AgentType {
   JUDGE
 }
 
+model User {
+  id                    String         @id @default(cuid())
+  githubId              Int            @unique
+  username              String
+  name                  String?
+  email                 String?
+  avatarUrl             String?
+  accessToken           String?
+  refreshToken          String?
+  refreshTokenExpiresAt DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  installations         Installation[]
+
+  @@map("users")
+}
+
+
 model Installation {
   id                   String     @id @default(cuid())
   githubInstallationId Int        @unique
+  accountUsername      String?
+  accountType          String?    @default("User")
+  status               String     @default("ACTIVE")
   repoList             Json       @default("[]")
   planType             PlanType   @default(FREE)
+  userId               String?
+  user                 User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
   createdAt            DateTime   @default(now())
   updatedAt            DateTime   @updatedAt
   reviews              PrReview[]

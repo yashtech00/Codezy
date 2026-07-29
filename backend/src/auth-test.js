@@ -11,6 +11,7 @@ let j=0
 let jy=0
 let uu=0
 
-module.exports = { handleLogin };
+export { handleLogin };
 // test trigger Sun Jul 26 12:59:54 IST 2026
 // webhook test Sun Jul 26 13:13:40 IST 2026
+

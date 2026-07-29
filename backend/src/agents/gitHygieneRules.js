@@ -264,10 +264,11 @@ function runGitHygieneStaticAnalysis(files, stats) {
   return allFindings;
 }
 
-module.exports = {
+export {
   runGitHygieneStaticAnalysis,
   analyzeFileHygiene,
   analyzePRLevelHygiene,
   SENSITIVE_FILENAMES,
   SECRET_PATTERNS,
 };
+
