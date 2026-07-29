@@ -1,4 +1,4 @@
-import { getAppOctokit } from '../../services/github.service.js';
+import { getOctokit } from '../../services/github.service.js';
 import prisma from '../../config/db.js';
 import { logger } from '../../shared/logger.js';
 
@@ -13,13 +13,14 @@ export const publishReviewResults = async ({
   metrics,
   policyResult,
   delta = {},
+  existingCheckRunId = null,
 }) => {
   if (!installationId || !repoFullName || !prNumber) {
     logger.warn('Skipping GitHub publishing: missing credentials or identifiers');
     return;
   }
 
-  const octokit = await getAppOctokit(installationId);
+  const octokit = getOctokit(installationId);
   const [owner, repo] = repoFullName.split('/');
 
   // 1. Update/Create Check Run
@@ -29,13 +30,17 @@ export const publishReviewResults = async ({
   else if (policyResult?.decision === 'INCOMPLETE') checkRunConclusion = 'neutral';
 
   try {
-    const pullRequest = await prisma.pullRequest.findUnique({ where: { id: pullRequestId } });
+    const pullRequest = pullRequestId
+      ? await prisma.pullRequest.findUnique({ where: { id: pullRequestId } })
+      : null;
 
-    if (pullRequest?.githubCheckRunId) {
+    const targetCheckRunId = existingCheckRunId || (pullRequest?.githubCheckRunId ? Number(pullRequest.githubCheckRunId) : null);
+
+    if (targetCheckRunId) {
       await octokit.rest.checks.update({
         owner,
         repo,
-        check_run_id: Number(pullRequest.githubCheckRunId),
+        check_run_id: Number(targetCheckRunId),
         status: 'completed',
         conclusion: checkRunConclusion,
         output: {
@@ -57,7 +62,7 @@ export const publishReviewResults = async ({
         },
       });
 
-      if (pullRequestId && checkRunRes.data.id) {
+      if (pullRequestId && checkRunRes?.data?.id) {
         await prisma.pullRequest.update({
           where: { id: pullRequestId },
           data: { githubCheckRunId: BigInt(checkRunRes.data.id) },
@@ -70,7 +75,7 @@ export const publishReviewResults = async ({
 
   // 2. Persistent Summary Comment
   try {
-    const summaryMarker = `<!-- codezy-summary:${pullRequestId} -->`;
+    const summaryMarker = `<!-- codezy-summary:${pullRequestId || repoFullName + '-' + prNumber} -->`;
     const summaryBody = `${summaryMarker}
 ## Codezy Level 2 Review — ${policyResult?.decision || 'PASS'}
 
@@ -87,7 +92,9 @@ export const publishReviewResults = async ({
 ${verifiedFindings.length === 0 ? '_No issues detected! Great job!_' : verifiedFindings.map(f => `- **[${f.severity}]** ${f.title} (${f.filePath}:L${f.startLine}) — _Status: ${f.verificationStatus}_`).join('\n')}
 `;
 
-    const pullRequest = await prisma.pullRequest.findUnique({ where: { id: pullRequestId } });
+    const pullRequest = pullRequestId
+      ? await prisma.pullRequest.findUnique({ where: { id: pullRequestId } })
+      : null;
 
     if (pullRequest?.githubSummaryCommentId) {
       await octokit.rest.issues.updateComment({
@@ -98,31 +105,35 @@ ${verifiedFindings.length === 0 ? '_No issues detected! Great job!_' : verifiedF
       });
     } else {
       // Find existing comment with marker first
-      const comments = await octokit.rest.issues.listComments({ owner, repo, issue_number: prNumber });
-      const existing = comments.data.find(c => c.body.includes(`codezy-summary:${pullRequestId}`));
+      const comments = await octokit.rest.issues.listComments({ owner, repo, issue_number: Number(prNumber) });
+      const existing = comments.data.find(c => c.body && c.body.includes(`codezy-summary:${pullRequestId || repoFullName + '-' + prNumber}`));
 
-      if (existing) {
+      if (existing?.id) {
         await octokit.rest.issues.updateComment({
           owner,
           repo,
           comment_id: existing.id,
           body: summaryBody,
         });
-        await prisma.pullRequest.update({
-          where: { id: pullRequestId },
-          data: { githubSummaryCommentId: BigInt(existing.id) },
-        }).catch(() => {});
+        if (pullRequestId) {
+          await prisma.pullRequest.update({
+            where: { id: pullRequestId },
+            data: { githubSummaryCommentId: BigInt(existing.id) },
+          }).catch(() => {});
+        }
       } else {
         const created = await octokit.rest.issues.createComment({
           owner,
           repo,
-          issue_number: prNumber,
+          issue_number: Number(prNumber),
           body: summaryBody,
         });
-        await prisma.pullRequest.update({
-          where: { id: pullRequestId },
-          data: { githubSummaryCommentId: BigInt(created.id) },
-        }).catch(() => {});
+        if (pullRequestId && created?.data?.id) {
+          await prisma.pullRequest.update({
+            where: { id: pullRequestId },
+            data: { githubSummaryCommentId: BigInt(created.data.id) },
+          }).catch(() => {});
+        }
       }
     }
   } catch (err) {

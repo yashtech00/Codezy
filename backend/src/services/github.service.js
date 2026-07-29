@@ -99,13 +99,13 @@ async function createCheckRun(owner, repo, headSha, installationId) {
     const { data: checkRun } = await octokit.checks.create({
       owner,
       repo,
-      name: 'AutoReview Code Review',
+      name: 'Codezy Review',
       head_sha: headSha,
       status: 'in_progress',
       started_at: new Date().toISOString(),
       output: {
-        title: 'AutoReview Processing',
-        summary: 'Supervisor node and AI agents (Style & Security) are auditing diff hunks...',
+        title: 'Codezy Level 2 Processing',
+        summary: 'Supervisor node and AI agents are auditing diff hunks...',
       },
     });
     console.log(`✅ [GitHub Checks] Created Check Run ID: ${checkRun.id}`);
@@ -145,6 +145,7 @@ async function updateCheckRun(owner, repo, checkRunId, installationId, severityS
 
 export {
   getOctokit,
+  getOctokit as getAppOctokit,
   fetchPrDiff,
   postPrComment,
   createCheckRun,
