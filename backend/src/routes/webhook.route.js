@@ -1,7 +1,7 @@
-const express = require('express');
-const verifySignature = require('../middleware/verifySignature');
-const { addReviewJob } = require('../queue/reviewQueue');
-const prisma = require('../config/db');
+import express from 'express';
+import verifySignature from '../middleware/verifySignature.js';
+import { addReviewJob } from '../queue/reviewQueue.js';
+import prisma from '../config/db.js';
 
 const router = express.Router();
 
@@ -26,8 +26,100 @@ router.post('/github', verifySignature, async (req, res) => {
     return;
   }
 
+  // ── Handle GitHub App Installation Events ─────────────────
+  if (eventType === 'installation') {
+    const installationId = payload.installation?.id;
+    const action = payload.action;
+    const accountUsername = payload.installation?.account?.login || null;
+    const accountType = payload.installation?.account?.type || 'User';
+
+    if (!installationId) return;
+
+    console.log(`⚙️ [Webhook Installation] Action: ${action}, Installation ID: ${installationId}, Account: ${accountUsername}`);
+
+    try {
+      if (action === 'created') {
+        const repoList = Array.isArray(payload.repositories)
+          ? payload.repositories.map(r => r.full_name)
+          : [];
+
+        // Check if there is a matching platform user
+        const matchingUser = accountUsername
+          ? await prisma.user.findFirst({ where: { username: accountUsername } })
+          : null;
+
+        await prisma.installation.upsert({
+          where: { githubInstallationId: Number(installationId) },
+          update: {
+            accountUsername,
+            accountType,
+            repoList,
+            status: 'ACTIVE',
+            userId: matchingUser ? matchingUser.id : undefined,
+          },
+          create: {
+            githubInstallationId: Number(installationId),
+            accountUsername,
+            accountType,
+            repoList,
+            status: 'ACTIVE',
+            userId: matchingUser ? matchingUser.id : null,
+          },
+        });
+        console.log(`✅ [Prisma DB] GitHub App Installation ${installationId} registered/activated in DB.`);
+      } else if (action === 'deleted') {
+        await prisma.installation.updateMany({
+          where: { githubInstallationId: Number(installationId) },
+          data: { status: 'DELETED' },
+        });
+        console.log(`🗑️ [Prisma DB] GitHub App Installation ${installationId} marked DELETED in DB.`);
+      } else if (action === 'suspend' || action === 'unsuspend') {
+        const newStatus = action === 'suspend' ? 'SUSPENDED' : 'ACTIVE';
+        await prisma.installation.updateMany({
+          where: { githubInstallationId: Number(installationId) },
+          data: { status: newStatus },
+        });
+        console.log(`⏸️ [Prisma DB] GitHub App Installation ${installationId} status updated to ${newStatus}.`);
+      }
+    } catch (err) {
+      console.error('❌ [Webhook Installation Error]:', err);
+    }
+    return;
+  }
+
+  // ── Handle Installation Repositories Changed Events ────────
+  if (eventType === 'installation_repositories') {
+    const installationId = payload.installation?.id;
+    if (!installationId) return;
+
+    try {
+      const addedRepos = (payload.repositories_added || []).map(r => r.full_name);
+      const removedRepos = (payload.repositories_removed || []).map(r => r.full_name);
+
+      const existing = await prisma.installation.findUnique({
+        where: { githubInstallationId: Number(installationId) },
+      });
+
+      if (existing) {
+        let currentRepos = Array.isArray(existing.repoList) ? existing.repoList : [];
+        // Add new, filter removed
+        currentRepos = [...new Set([...currentRepos, ...addedRepos])].filter(r => !removedRepos.includes(r));
+
+        await prisma.installation.update({
+          where: { githubInstallationId: Number(installationId) },
+          data: { repoList: currentRepos },
+        });
+        console.log(`🔄 [Prisma DB] Updated repos for Installation ${installationId}: ${currentRepos.length} repos active.`);
+      }
+    } catch (err) {
+      console.error('❌ [Webhook Installation Repos Error]:', err);
+    }
+    return;
+  }
+
+  // ── Handle Pull Request Events ────────────────────────────
   if (eventType !== 'pull_request') {
-    console.log(`ℹ️ [Webhook Ignored] Event '${eventType}' is not 'pull_request'.`);
+    console.log(`ℹ️ [Webhook Ignored] Event '${eventType}' is not 'pull_request', 'installation', or 'ping'.`);
     return;
   }
 
@@ -36,11 +128,9 @@ router.post('/github', verifySignature, async (req, res) => {
     return;
   }
 
-  // ── Draft PR skip logic ──────────────────────────────────
-  // Skip draft PRs to avoid noisy reviews on work-in-progress.
-  // When a draft becomes ready for review (ready_for_review action), we DO process it.
+  // Skip draft PRs
   if (payload.pull_request.draft === true && payload.action !== 'ready_for_review') {
-    console.log(`⏭️ [Webhook Skipped] PR #${payload.pull_request.number} is a DRAFT — skipping review. Will trigger when marked ready.`);
+    console.log(`⏭️ [Webhook Skipped] PR #${payload.pull_request.number} is a DRAFT — skipping review.`);
     return;
   }
 
@@ -58,18 +148,22 @@ router.post('/github', verifySignature, async (req, res) => {
     if (installationId) {
       installationRecord = await prisma.installation.upsert({
         where: { githubInstallationId: Number(installationId) },
-        update: { repoList: [repoFullName] },
+        update: {
+          repoList: [repoFullName],
+          status: 'ACTIVE',
+        },
         create: {
           githubInstallationId: Number(installationId),
+          accountUsername: payload.repository.owner?.login || null,
           repoList: [repoFullName],
+          status: 'ACTIVE',
           planType: 'FREE',
         },
       });
       console.log(`💾 [Prisma DB] Updated installation record: ID=${installationRecord.id}`);
     }
 
-    // 2. Create or update PrReview record in Prisma DB
-    // If this PR has been reviewed before, increment the counter.
+    // 2. Create PrReview record in Prisma DB
     const existingReview = await prisma.prReview.findFirst({
       where: { repoFullName, prNumber },
       orderBy: { createdAt: 'desc' },
@@ -98,7 +192,7 @@ router.post('/github', verifySignature, async (req, res) => {
       installationId: installationId ? Number(installationId) : null,
       headSha,
       diffUrl,
-      reviewCount, // for comment footer
+      reviewCount,
     });
 
     console.log(`📥 [BullMQ Enqueued] Job pushed for PR #${prNumber} (${repoFullName})`);
@@ -107,4 +201,5 @@ router.post('/github', verifySignature, async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
+

@@ -1,8 +1,8 @@
-const { ChatOpenAI } = require('@langchain/openai');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const config = require('../config/env');
-const { runGitHygieneStaticAnalysis } = require('./gitHygieneRules');
-const { getPathMultiplier, getPathLabel } = require('../config/pathWeights');
+import { ChatOpenAI } from '@langchain/openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import config from '../config/env.js';
+import { runGitHygieneStaticAnalysis } from './gitHygieneRules.js';
+import { getPathMultiplier, getPathLabel } from '../config/pathWeights.js';
 
 // ============================================================
 // MODEL TIERING
@@ -643,7 +643,8 @@ function formatMarkdownComment(severityScore, findingsByCategory, agentSummary =
     markdown += `✅ **No issues found! Clean PR — great work.**\n\n`;
     markdown += `---\n`;
     const shortSha = headSha ? headSha.substring(0, 7) : 'unknown';
-    markdown += `*🔄 Reviewed **${reviewCount}** time(s) | Last commit: \`${shortSha}\` | Automated review by [Codezy](https://github.com/apps/autoreview-bot)*`;
+    markdown += `*🔄 Reviewed **${reviewCount}** time(s) | Last commit: \`${shortSha}\` | Automated review by [Codezy](https://github.com/apps/codezyautoreview)*`;
+
     return markdown;
   }
 
@@ -701,7 +702,8 @@ function formatMarkdownComment(severityScore, findingsByCategory, agentSummary =
   markdown += `</details>\n\n`;
 
   const shortSha = headSha ? headSha.substring(0, 7) : 'unknown';
-  markdown += `*🔄 Reviewed **${reviewCount}** time(s) | Last commit: \`${shortSha}\` | Automated review by [Codezy](https://github.com/apps/autoreview-bot)*`;
+  markdown += `*🔄 Reviewed **${reviewCount}** time(s) | Last commit: \`${shortSha}\` | Automated review by [Codezy](https://github.com/apps/codezyautoreview)*`;
+
 
   return markdown;
 }
@@ -710,7 +712,7 @@ function formatMarkdownComment(severityScore, findingsByCategory, agentSummary =
 // EXPORTS
 // ============================================================
 
-module.exports = {
+export {
   runSupervisorNode,
   runGitHygieneAgent,
   runStyleAgent,
@@ -725,3 +727,4 @@ module.exports = {
   SEVERITY_WEIGHTS,
   CATEGORY_META,
 };
+

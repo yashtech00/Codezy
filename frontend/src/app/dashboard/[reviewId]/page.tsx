@@ -35,7 +35,7 @@ interface Review {
 
 async function getReview(reviewId: string): Promise<Review | null> {
   try {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     const res = await fetch(`${apiUrl}/api/reviews/${reviewId}`, { cache: 'no-store' });
     if (!res.ok) return null;
     const data = await res.json();

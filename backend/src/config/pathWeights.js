@@ -71,8 +71,9 @@ function getPathLabel(filePath) {
   return null;
 }
 
-module.exports = {
+export {
   getPathMultiplier,
   getPathLabel,
   CRITICAL_PATH_PATTERNS,
 };
+

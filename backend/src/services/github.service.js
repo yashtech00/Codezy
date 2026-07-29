@@ -1,9 +1,9 @@
-const { Octokit } = require('@octokit/rest');
-const { createAppAuth } = require('@octokit/auth-app');
-const fs = require('fs');
-const path = require('path');
-const config = require('../config/env');
-const prisma = require('../config/db');
+import { Octokit } from '@octokit/rest';
+import { createAppAuth } from '@octokit/auth-app';
+import fs from 'fs';
+import path from 'path';
+import config from '../config/env.js';
+import prisma from '../config/db.js';
 
 async function resolveInstallationId(installationId) {
   if (installationId && Number(installationId)) {
@@ -143,10 +143,11 @@ async function updateCheckRun(owner, repo, checkRunId, installationId, severityS
   }
 }
 
-module.exports = {
+export {
   getOctokit,
   fetchPrDiff,
   postPrComment,
   createCheckRun,
   updateCheckRun,
 };
+

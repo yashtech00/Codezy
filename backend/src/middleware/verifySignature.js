@@ -1,5 +1,5 @@
-const crypto = require('crypto');
-const config = require('../config/env');
+import crypto from 'crypto';
+import config from '../config/env.js';
 
 function verifySignature(req, res, next) {
   const signature = req.headers['x-hub-signature-256'];
@@ -44,4 +44,5 @@ function verifySignature(req, res, next) {
   next();
 }
 
-module.exports = verifySignature;
+export default verifySignature;
+

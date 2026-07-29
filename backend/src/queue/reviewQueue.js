@@ -1,5 +1,5 @@
-const { Queue } = require('bullmq');
-const connection = require('./connection');
+import { Queue } from 'bullmq';
+import connection from './connection.js';
 
 const QUEUE_NAME = 'pr-review-queue';
 
@@ -14,4 +14,5 @@ async function addReviewJob(jobData) {
   });
 }
 
-module.exports = { reviewQueue, addReviewJob, QUEUE_NAME };
+export { reviewQueue, addReviewJob, QUEUE_NAME };
+
