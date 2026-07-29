@@ -19,10 +19,16 @@ import {
   formatMarkdownComment,
 } from '../agents/reviewAgents.js';
 
+// Level 2 Pipeline Modules
+import { deduplicateFindings } from '../review-engine/findings/deduplicate.js';
+import { retrieveHunkContext } from '../review-engine/context/contextRetriever.js';
+import { verifyCandidates } from '../review-engine/agents/verification/verification.agent.js';
+import { matchFindingLifecycle } from '../review-engine/findings/lifecycle.js';
+import { computePRMetrics } from '../review-engine/scoring/scoring.js';
+import { evaluatePolicy } from '../review-engine/policies/policyEngine.js';
+import { publishReviewResults } from '../review-engine/publisher/githubPublisher.js';
+import { logger } from '../shared/logger.js';
 
-// ────────────────────────────────────────────────────────────
-// Helper: Create an AgentRun record in Prisma
-// ────────────────────────────────────────────────────────────
 async function createAgentRun(reviewId, agentType) {
   if (!reviewId) return null;
   return prisma.agentRun.create({
@@ -33,7 +39,6 @@ async function createAgentRun(reviewId, agentType) {
   });
 }
 
-// Helper: Update an AgentRun with findings
 async function completeAgentRun(run, findings) {
   if (!run) return;
   await prisma.agentRun.update({
@@ -42,9 +47,6 @@ async function completeAgentRun(run, findings) {
   }).catch((err) => console.error(`[Worker] Failed to update AgentRun ${run.id}:`, err.message));
 }
 
-// ────────────────────────────────────────────────────────────
-// Demo diff fallback (when GitHub API returns no files)
-// ────────────────────────────────────────────────────────────
 const DEMO_FILES = [
   {
     filename: 'backend/src/test-demo.js',
@@ -66,57 +68,22 @@ const DEMO_FILES = [
 -module.exports = { calculate_total };
 +export default { calculate_total };`,
   },
-  {
-    filename: 'backend/src/routes/users.js',
-    status: 'added',
-    additions: 20,
-    deletions: 0,
-    changes: 20,
-    patch: `@@ -0,0 +1,20 @@
-+const express = require('express');
-+const router = express.Router();
-+const db = require('../config/db');
-+
-+// Get user by ID — no auth check!
-+router.get('/users/:id', async (req, res) => {
-+  const userId = req.params.id;
-+  // N+1 problem: this runs in a loop elsewhere
-+  const user = await db.query('SELECT * FROM users WHERE id = ' + userId);
-+  res.json(user);
-+});
-+
-+router.post('/users', async (req, res) => {
-+  const { name, email } = req.body;
-+  // No input validation
-+  const user = await db.create({ name, email });
-+  res.json(user);
-+});
-+
-+module.exports = router;`,
-  },
 ];
 
-// ────────────────────────────────────────────────────────────
-// MAIN WORKER
-// ────────────────────────────────────────────────────────────
 const reviewWorker = new Worker(
   QUEUE_NAME,
   async (job) => {
     const { reviewId, repoFullName, prNumber, installationId, headSha, reviewCount = 1 } = job.data;
 
-    console.log(`\n${'═'.repeat(60)}`);
-    console.log(`⚙️  [Worker Start] PR #${prNumber} for ${repoFullName} (Review: ${reviewId})`);
-    console.log(`${'═'.repeat(60)}`);
+    logger.info('Review Job Started', { prNumber, repoFullName, reviewId, headSha });
 
     const [owner, repo] = repoFullName.split('/');
 
-    // ── Step 1: Create GitHub Check Run ──────────────────────
     let checkRun = null;
     if (owner && repo && headSha) {
       checkRun = await createCheckRun(owner, repo, headSha, installationId);
     }
 
-    // ── Step 2: Mark DB review as RUNNING ────────────────────
     if (reviewId) {
       await prisma.prReview.update({
         where: { id: reviewId },
@@ -130,29 +97,18 @@ const reviewWorker = new Worker(
       message: 'Analyzing PR diff — routing to review agents...',
     });
 
-    // ── Step 3: Fetch & Preprocess PR diff ───────────────────
     let rawFiles = await fetchPrDiff(owner, repo, prNumber, installationId);
     let files = preprocessDiff(rawFiles);
 
     if (files.length === 0) {
-      console.log('💡 [Worker] No files from GitHub — using demo diff for evaluation');
       files = preprocessDiff(DEMO_FILES);
     }
 
     const stats = calculateDiffStats(files);
-    console.log(`📊 [Diff Stats] Files: ${stats.totalFiles}, Lines: ${stats.totalLinesChanged}`);
-    console.log(`📂 [File Types]`, stats.fileCategories);
-
-    // ── Step 3.5: Fetch .codezy.yaml repo config ────────────────────
-    // Determines which agent categories are enabled for this repo.
-    // Falls back to all-enabled if file not found or invalid.
     const repoConfig = await fetchRepoConfig(owner, repo, installationId);
     const enabledCategories = getEnabledCategories(repoConfig);
-    console.log(`⚙️  [RepoConfig] Enabled categories: [${[...enabledCategories].join(', ')}]`);
 
-    // ── Step 4: Supervisor routing ────────────────────────────
     const routing = await runSupervisorNode(stats, files);
-    console.log(`🧠 [Supervisor] Route: ${routing.route}${routing.reason ? ' — ' + routing.reason : ''}`);
 
     emitAgentStatus(reviewId, {
       agent: 'supervisor',
@@ -175,255 +131,260 @@ const reviewWorker = new Worker(
       return;
     }
 
-    // ── Step 5: Run agents in parallel ───────────────────────
-    // Git Hygiene is always run (static, fast, no LLM cost)
-    // Other agents depend on routing
-
-    const findingsByCategory = {
-      GIT_HYGIENE: [],
-      SECURITY: [],
-      LOGIC: [],
-      PERFORMANCE: [],
-      TESTING: [],
-      STYLE: [],
-    };
-
+    const rawCandidates = [];
     const agentPromises = [];
 
-    // ── GIT HYGIENE (always runs unless explicitly disabled) ──
+    // Run Git Hygiene Agent
     if (enabledCategories.has('GIT_HYGIENE')) {
       const gitHygieneRun = await createAgentRun(reviewId, 'GIT_HYGIENE');
-      emitAgentStatus(reviewId, {
-        agent: 'git_hygiene',
-        status: 'running',
-        message: 'Static analysis: checking secrets, sensitive files, debug artifacts...',
-      });
       agentPromises.push(
         runGitHygieneAgent(files, stats).then(async (findings) => {
-          findingsByCategory.GIT_HYGIENE = findings;
-          console.log(`🔑 [GitHygieneAgent] ${findings.length} issues found`);
-          emitAgentStatus(reviewId, {
-            agent: 'git_hygiene',
-            status: 'done',
-            findingsCount: findings.length,
-            message: `${findings.length} git hygiene issue(s) found`,
-          });
+          rawCandidates.push(
+            ...findings.map(f => ({
+              source: 'STATIC',
+              sourceAgent: 'git_hygiene',
+              category: 'GIT_HYGIENE',
+              title: f.title || f.rule || 'Git Hygiene Issue',
+              description: f.description || f.message || '',
+              filePath: f.file || f.filePath || files[0]?.filename || 'unknown',
+              startLine: f.line || f.startLine || 1,
+              endLine: f.line || f.endLine || 1,
+              side: 'RIGHT',
+              severity: (f.severity || 'MEDIUM').toUpperCase(),
+              confidence: 0.95,
+              evidence: { changedCode: f.snippet || '', reasoning: f.explanation || '' },
+              impact: f.impact || 'Git hygiene policy violation',
+              recommendation: f.recommendation || f.suggestion || null,
+            }))
+          );
           await completeAgentRun(gitHygieneRun, findings);
         })
       );
-    } else {
-      console.log('⏭️ [RepoConfig] GIT_HYGIENE disabled — skipping agent');
     }
 
-    // ── STYLE (runs unless GIT_HYGIENE_ONLY or disabled) ──
-    if (routing.route !== 'GIT_HYGIENE_ONLY' && enabledCategories.has('STYLE')) {
-      const styleRun = await createAgentRun(reviewId, 'STYLE');
-      emitAgentStatus(reviewId, {
-        agent: 'style',
-        status: 'running',
-        message: 'Reviewing code style, naming, and quality conventions...',
-      });
-      agentPromises.push(
-        runStyleAgent(files, stats.totalLinesChanged).then(async (findings) => {
-          findingsByCategory.STYLE = findings;
-          console.log(`🎨 [StyleAgent] ${findings.length} issues found`);
-          emitAgentStatus(reviewId, {
-            agent: 'style',
-            status: 'done',
-            findingsCount: findings.length,
-          });
-          await completeAgentRun(styleRun, findings);
-        })
-      );
-    } else if (routing.route !== 'GIT_HYGIENE_ONLY') {
-      console.log('⏭️ [RepoConfig] STYLE disabled — skipping agent');
-    }
-
+    // Run Security Agent
     if (routing.route !== 'GIT_HYGIENE_ONLY' && enabledCategories.has('SECURITY')) {
-      // ── SECURITY ──
       const securityRun = await createAgentRun(reviewId, 'SECURITY');
-      emitAgentStatus(reviewId, {
-        agent: 'security',
-        status: 'running',
-        message: 'Auditing for SQL injection, XSS, auth gaps, and injection vulnerabilities...',
-      });
       agentPromises.push(
         runSecurityAgent(files, stats.totalLinesChanged).then(async (findings) => {
-          findingsByCategory.SECURITY = findings;
-          console.log(`🔒 [SecurityAgent] ${findings.length} issues found`);
-          emitAgentStatus(reviewId, {
-            agent: 'security',
-            status: 'done',
-            findingsCount: findings.length,
-          });
+          rawCandidates.push(
+            ...findings.map(f => ({
+              source: 'AI',
+              sourceAgent: 'security',
+              category: 'SECURITY',
+              title: f.title || 'Security Vulnerability',
+              description: f.description || f.reasoning || '',
+              filePath: f.file || f.filePath || files[0]?.filename || 'unknown',
+              startLine: f.line || f.startLine || 1,
+              endLine: f.line || f.endLine || 1,
+              side: 'RIGHT',
+              severity: (f.severity || 'HIGH').toUpperCase(),
+              confidence: 0.85,
+              evidence: { changedCode: f.snippet || '', reasoning: f.reasoning || '' },
+              impact: f.impact || 'Security risk detected',
+              recommendation: f.recommendation || f.suggestion || null,
+            }))
+          );
           await completeAgentRun(securityRun, findings);
         })
       );
-    } else if (routing.route !== 'GIT_HYGIENE_ONLY') {
-      console.log('⏭️ [RepoConfig] SECURITY disabled — skipping agent');
     }
 
-    // ── FULL_REVIEW only agents ──
-    if (routing.route === 'FULL_REVIEW') {
-      if (enabledCategories.has('LOGIC')) {
-        const logicRun = await createAgentRun(reviewId, 'LOGIC');
-        emitAgentStatus(reviewId, {
-          agent: 'logic',
-          status: 'running',
-          message: 'Checking null handling, async safety, edge cases, operator correctness...',
-        });
-        agentPromises.push(
-          runLogicAgent(files, stats.totalLinesChanged).then(async (findings) => {
-            findingsByCategory.LOGIC = findings;
-            console.log(`🧠 [LogicAgent] ${findings.length} issues found`);
-            emitAgentStatus(reviewId, {
-              agent: 'logic',
-              status: 'done',
-              findingsCount: findings.length,
-            });
-            await completeAgentRun(logicRun, findings);
-          })
-        );
-      } else {
-        console.log('⏭️ [RepoConfig] LOGIC disabled — skipping agent');
-      }
-
-      if (enabledCategories.has('PERFORMANCE')) {
-        const performanceRun = await createAgentRun(reviewId, 'PERFORMANCE');
-        emitAgentStatus(reviewId, {
-          agent: 'performance',
-          status: 'running',
-          message: 'Detecting N+1 queries, memory leaks, blocking operations...',
-        });
-        agentPromises.push(
-          runPerformanceAgent(files, stats.totalLinesChanged).then(async (findings) => {
-            findingsByCategory.PERFORMANCE = findings;
-            console.log(`⚡ [PerformanceAgent] ${findings.length} issues found`);
-            emitAgentStatus(reviewId, {
-              agent: 'performance',
-              status: 'done',
-              findingsCount: findings.length,
-            });
-            await completeAgentRun(performanceRun, findings);
-          })
-        );
-      } else {
-        console.log('⏭️ [RepoConfig] PERFORMANCE disabled — skipping agent');
-      }
-
-      if (enabledCategories.has('TESTING')) {
-        const testingRun = await createAgentRun(reviewId, 'TESTING');
-        emitAgentStatus(reviewId, {
-          agent: 'testing',
-          status: 'running',
-          message: 'Checking for missing test coverage on new code...',
-        });
-        agentPromises.push(
-          runTestingAgent(files, stats.totalLinesChanged).then(async (findings) => {
-            findingsByCategory.TESTING = findings;
-            console.log(`🧪 [TestingAgent] ${findings.length} issues found`);
-            emitAgentStatus(reviewId, {
-              agent: 'testing',
-              status: 'done',
-              findingsCount: findings.length,
-            });
-            await completeAgentRun(testingRun, findings);
-          })
-        );
-      } else {
-        console.log('⏭️ [RepoConfig] TESTING disabled — skipping agent');
-      }
+    // Run Style Agent
+    if (routing.route !== 'GIT_HYGIENE_ONLY' && enabledCategories.has('STYLE')) {
+      const styleRun = await createAgentRun(reviewId, 'STYLE');
+      agentPromises.push(
+        runStyleAgent(files, stats.totalLinesChanged).then(async (findings) => {
+          rawCandidates.push(
+            ...findings.map(f => ({
+              source: 'AI',
+              sourceAgent: 'style',
+              category: 'STYLE',
+              title: f.title || 'Style Violation',
+              description: f.description || f.reasoning || '',
+              filePath: f.file || f.filePath || files[0]?.filename || 'unknown',
+              startLine: f.line || f.startLine || 1,
+              endLine: f.line || f.endLine || 1,
+              side: 'RIGHT',
+              severity: (f.severity || 'LOW').toUpperCase(),
+              confidence: 0.75,
+              evidence: { changedCode: f.snippet || '', reasoning: f.reasoning || '' },
+              impact: f.impact || 'Code style inconsistency',
+              recommendation: f.recommendation || f.suggestion || null,
+            }))
+          );
+          await completeAgentRun(styleRun, findings);
+        })
+      );
     }
 
-    // Wait for all agents to complete in parallel
+    // Run Logic Agent
+    if (routing.route === 'FULL_REVIEW' && enabledCategories.has('LOGIC')) {
+      const logicRun = await createAgentRun(reviewId, 'LOGIC');
+      agentPromises.push(
+        runLogicAgent(files, stats.totalLinesChanged).then(async (findings) => {
+          rawCandidates.push(
+            ...findings.map(f => ({
+              source: 'AI',
+              sourceAgent: 'logic',
+              category: 'LOGIC',
+              title: f.title || 'Logic Defect',
+              description: f.description || f.reasoning || '',
+              filePath: f.file || f.filePath || files[0]?.filename || 'unknown',
+              startLine: f.line || f.startLine || 1,
+              endLine: f.line || f.endLine || 1,
+              side: 'RIGHT',
+              severity: (f.severity || 'HIGH').toUpperCase(),
+              confidence: 0.85,
+              evidence: { changedCode: f.snippet || '', reasoning: f.reasoning || '' },
+              impact: f.impact || 'Potential runtime or logic bug',
+              recommendation: f.recommendation || f.suggestion || null,
+            }))
+          );
+          await completeAgentRun(logicRun, findings);
+        })
+      );
+    }
+
+    // Run Performance Agent
+    if (routing.route === 'FULL_REVIEW' && enabledCategories.has('PERFORMANCE')) {
+      const performanceRun = await createAgentRun(reviewId, 'PERFORMANCE');
+      agentPromises.push(
+        runPerformanceAgent(files, stats.totalLinesChanged).then(async (findings) => {
+          rawCandidates.push(
+            ...findings.map(f => ({
+              source: 'AI',
+              sourceAgent: 'performance',
+              category: 'PERFORMANCE',
+              title: f.title || 'Performance Issue',
+              description: f.description || f.reasoning || '',
+              filePath: f.file || f.filePath || files[0]?.filename || 'unknown',
+              startLine: f.line || f.startLine || 1,
+              endLine: f.line || f.endLine || 1,
+              side: 'RIGHT',
+              severity: (f.severity || 'MEDIUM').toUpperCase(),
+              confidence: 0.8,
+              evidence: { changedCode: f.snippet || '', reasoning: f.reasoning || '' },
+              impact: f.impact || 'Performance bottleneck',
+              recommendation: f.recommendation || f.suggestion || null,
+            }))
+          );
+          await completeAgentRun(performanceRun, findings);
+        })
+      );
+    }
+
+    // Run Testing Agent
+    if (routing.route === 'FULL_REVIEW' && enabledCategories.has('TESTING')) {
+      const testingRun = await createAgentRun(reviewId, 'TESTING');
+      agentPromises.push(
+        runTestingAgent(files, stats.totalLinesChanged).then(async (findings) => {
+          rawCandidates.push(
+            ...findings.map(f => ({
+              source: 'AI',
+              sourceAgent: 'testing',
+              category: 'TESTING',
+              title: f.title || 'Missing Tests',
+              description: f.description || f.reasoning || '',
+              filePath: f.file || f.filePath || files[0]?.filename || 'unknown',
+              startLine: f.line || f.startLine || 1,
+              endLine: f.line || f.endLine || 1,
+              side: 'RIGHT',
+              severity: (f.severity || 'MEDIUM').toUpperCase(),
+              confidence: 0.8,
+              evidence: { changedCode: f.snippet || '', reasoning: f.reasoning || '' },
+              impact: f.impact || 'Untested code branch',
+              recommendation: f.recommendation || f.suggestion || null,
+            }))
+          );
+          await completeAgentRun(testingRun, findings);
+        })
+      );
+    }
+
     await Promise.all(agentPromises);
 
-    console.log(`\n📋 [Pre-Judge Summary]:`);
-    Object.entries(findingsByCategory).forEach(([cat, arr]) => {
-      if (arr.length > 0) console.log(`   ${cat}: ${arr.length} findings`);
-    });
+    // ── LEVEL 2 PIPELINE EXECUTION ────────────────────────────
 
-    // ── Step 6: Judge / Verification Pass ────────────────────
-    // Flatten all findings for judge
-    const allFindingsFlat = Object.values(findingsByCategory).flat();
-    const totalBeforeJudge = allFindingsFlat.length;
+    // 1. Context Retrieval
+    const repoContext = await retrieveHunkContext({ changedFiles: files });
 
+    // 2. Deduplication
+    const repoRecord = await prisma.repository.findFirst({ where: { fullName: repoFullName } });
+    const repoId = repoRecord ? repoRecord.id : 'default_repo';
+    const deduplicatedCandidates = deduplicateFindings(rawCandidates, repoId);
+
+    // 3. Verification Engine
     emitAgentStatus(reviewId, {
-      agent: 'judge',
+      agent: 'verification',
       status: 'running',
-      message: `Verifying ${totalBeforeJudge} findings against diff — filtering false positives...`,
+      message: `Verifying ${deduplicatedCandidates.length} deduplicated finding candidate(s)...`,
+    });
+    const verifiedFindings = await verifyCandidates(deduplicatedCandidates, repoContext);
+
+    // 4. Finding Lifecycle Matching
+    const pullRequestRecord = await prisma.pullRequest.findFirst({
+      where: { repository: { fullName: repoFullName }, githubPrNumber: prNumber },
+    });
+    const prId = pullRequestRecord ? pullRequestRecord.id : null;
+
+    const reviewAttemptRecord = prId
+      ? await prisma.reviewAttempt.findFirst({
+          where: { pullRequestId: prId, headSha },
+        })
+      : null;
+    const attemptId = reviewAttemptRecord ? reviewAttemptRecord.id : 'temp_attempt';
+
+    const { lifecycleResults, delta } = await matchFindingLifecycle({
+      pullRequestId: prId,
+      reviewAttemptId: attemptId,
+      verifiedFindings,
     });
 
-    const judgeRun = await createAgentRun(reviewId, 'JUDGE');
-    let verifiedFindings = await runJudgeAgent(allFindingsFlat, files, stats.totalLinesChanged);
+    // 5. Scoring & Policy Engine
+    const metrics = computePRMetrics(verifiedFindings, 100);
+    const policyResult = evaluatePolicy({ verifiedFindings, metrics, repoConfig });
 
-    // Rebuild findingsByCategory from verified findings
-    const verifiedByCategory = {
-      GIT_HYGIENE: [],
-      SECURITY: [],
-      LOGIC: [],
-      PERFORMANCE: [],
-      TESTING: [],
-      STYLE: [],
-    };
-    verifiedFindings.forEach((f) => {
-      const cat = f.category || 'STYLE';
-      if (verifiedByCategory[cat]) {
-        verifiedByCategory[cat].push(f);
-      } else {
-        verifiedByCategory.STYLE.push(f);
-      }
-    });
-
-    const totalAfterJudge = verifiedFindings.length;
-    const filtered = totalBeforeJudge - totalAfterJudge;
-
-    console.log(`⚖️  [JudgeAgent] Verified ${totalAfterJudge}/${totalBeforeJudge} findings (filtered ${filtered} false positives)`);
-    emitAgentStatus(reviewId, {
-      agent: 'judge',
-      status: 'done',
-      message: `Verified ${totalAfterJudge} findings, removed ${filtered} false positive(s)`,
-      findingsCount: totalAfterJudge,
-    });
-    await completeAgentRun(judgeRun, verifiedFindings);
-
-    // ── Step 7: Calculate explicit severity score (with path weighting) ──────
-    const severityScore = calculateSeverityScore(verifiedByCategory, files);
-    console.log(`📈 [Severity Score] ${severityScore}/10`);
-
-    // Agent summary for DB storage
-    const agentSummary = {};
-    Object.entries(verifiedByCategory).forEach(([cat, arr]) => {
-      agentSummary[cat] = arr.length;
-    });
-
-    // ── Step 8: Format markdown comment ──────────────────────
-    const markdownComment = formatMarkdownComment(
-      severityScore,
-      verifiedByCategory,
-      agentSummary,
-      { reviewCount, headSha }  // Feature 5: review counter + commit SHA in footer
-    );
-
-    // ── Step 9: Post GitHub PR comment ───────────────────────
-    if (owner && repo && prNumber) {
-      await postPrComment(owner, repo, prNumber, installationId, markdownComment);
+    // 6. Level 2 DB Updates
+    if (reviewAttemptRecord) {
+      await prisma.reviewAttempt.update({
+        where: { id: reviewAttemptRecord.id },
+        data: {
+          status: 'COMPLETED',
+          riskScore: metrics.riskScore,
+          qualityScore: metrics.qualityScore,
+          reviewConfidence: metrics.reviewConfidence,
+          reviewCoverage: metrics.reviewCoverage,
+          mergeDecision: policyResult.decision,
+          reviewDelta: delta,
+          policyResult,
+          completedAt: new Date(),
+        },
+      }).catch(() => {});
     }
 
-    // ── Step 10: Update GitHub Check Run ─────────────────────
-    if (checkRun && checkRun.id) {
-      await updateCheckRun(owner, repo, checkRun.id, installationId, severityScore, markdownComment);
-    }
+    // 7. GitHub Publisher
+    await publishReviewResults({
+      pullRequestId: prId,
+      reviewAttemptId: attemptId,
+      installationId,
+      repoFullName,
+      prNumber,
+      headSha,
+      verifiedFindings,
+      metrics,
+      policyResult,
+      delta,
+    });
 
-    // ── Step 11: Update PrReview in DB ───────────────────────
+    // 8. Backward-compatible DB update for PrReview
     if (reviewId) {
       await prisma.prReview.update({
         where: { id: reviewId },
         data: {
           status: 'COMPLETED',
-          severityScore: Math.round(severityScore),
-          summary: `GH:${agentSummary.GIT_HYGIENE || 0} SEC:${agentSummary.SECURITY || 0} LOG:${agentSummary.LOGIC || 0} PERF:${agentSummary.PERFORMANCE || 0} TEST:${agentSummary.TESTING || 0} STY:${agentSummary.STYLE || 0}`,
-          agentSummary,
+          severityScore: Math.round(metrics.riskScore),
+          summary: `Risk:${metrics.riskScore}/10 decision:${policyResult.decision} verified:${verifiedFindings.length}`,
         },
       }).catch((err) => console.error('❌ [DB] Failed to complete review:', err.message));
     }
@@ -431,26 +392,21 @@ const reviewWorker = new Worker(
     emitAgentStatus(reviewId, {
       agent: 'supervisor',
       status: 'completed',
-      severityScore,
-      message: `Review complete! Score: ${severityScore}/10 | ${totalAfterJudge} verified findings`,
+      severityScore: metrics.riskScore,
+      message: `Level 2 Review complete! Decision: ${policyResult.decision} | Risk: ${metrics.riskScore}/10`,
     });
 
-    console.log(`✅ [Worker Complete] PR #${prNumber} reviewed. Score: ${severityScore}/10, Findings: ${totalAfterJudge}`);
-    console.log(`${'═'.repeat(60)}\n`);
+    logger.info('Level 2 Review Execution Completed', { prNumber, repoFullName, decision: policyResult.decision, riskScore: metrics.riskScore });
   },
   { connection, concurrency: 5 }
 );
 
-// ────────────────────────────────────────────────────────────
-// Worker event handlers
-// ────────────────────────────────────────────────────────────
 reviewWorker.on('completed', (job) => {
-  console.log(`[BullMQ] Job ${job.id} completed successfully`);
+  logger.info(`BullMQ Job Completed`, { jobId: job.id });
 });
 
 reviewWorker.on('failed', (job, err) => {
-  console.error(`❌ [BullMQ] Job ${job?.id} failed:`, err.message);
-  // Attempt to mark review as FAILED in DB
+  logger.error(`BullMQ Job Failed`, { jobId: job?.id, error: err.message });
   const reviewId = job?.data?.reviewId;
   if (reviewId) {
     prisma.prReview.update({
@@ -461,4 +417,3 @@ reviewWorker.on('failed', (job, err) => {
 });
 
 export default reviewWorker;
-

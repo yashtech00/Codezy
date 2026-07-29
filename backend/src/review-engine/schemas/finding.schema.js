@@ -1,0 +1,79 @@
+import { z } from 'zod';
+
+export const FindingCategoryEnum = z.enum([
+  'SECURITY',
+  'LOGIC',
+  'PERFORMANCE',
+  'TESTING',
+  'STYLE',
+  'GIT_HYGIENE',
+  'API_CONTRACT',
+  'DATABASE',
+  'DEPENDENCY_RISK',
+  'ARCHITECTURE',
+  'CONCURRENCY',
+  'OBSERVABILITY',
+]);
+
+export const FindingSeverityEnum = z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']);
+
+export const VerificationStatusEnum = z.enum(['VERIFIED', 'LIKELY', 'UNVERIFIED', 'REJECTED']);
+
+export const FindingStatusEnum = z.enum([
+  'NEW',
+  'OPEN',
+  'RESOLVED',
+  'REOPENED',
+  'DISMISSED',
+  'ACCEPTED_RISK',
+  'OUTDATED',
+]);
+
+export const MergeDecisionEnum = z.enum(['PASS', 'WARNING', 'ACTION_REQUIRED', 'INCOMPLETE']);
+
+export const CandidateFindingSchema = z.object({
+  source: z.enum(['AI', 'STATIC', 'DEPENDENCY_SCANNER']).default('AI'),
+  sourceAgent: z.string(),
+  ruleId: z.string().optional(),
+  category: FindingCategoryEnum,
+  title: z.string().min(3),
+  description: z.string().min(5),
+  filePath: z.string().min(1),
+  startLine: z.number().int().min(1),
+  endLine: z.number().int().min(1),
+  side: z.enum(['RIGHT', 'LEFT']).default('RIGHT'),
+  severity: FindingSeverityEnum,
+  confidence: z.number().min(0).max(1).default(0.8),
+  evidence: z.object({
+    changedCode: z.string(),
+    relatedContext: z.string().optional(),
+    reasoning: z.string(),
+  }),
+  impact: z.string(),
+  recommendation: z.string().optional(),
+});
+
+export const VerifiedFindingSchema = CandidateFindingSchema.extend({
+  fingerprint: z.string(),
+  codeAnchor: z.string(),
+  verificationStatus: VerificationStatusEnum,
+  introducedByPr: z.boolean().default(true),
+  introductionReason: z.string().optional(),
+  adjustedConfidence: z.number().min(0).max(1),
+  blockingEligible: z.boolean(),
+  verificationEvidence: z.array(
+    z.object({
+      type: z.enum(['STATIC', 'CONTEXT', 'MODEL']),
+      description: z.string(),
+      reference: z.string().optional(),
+    })
+  ).default([]),
+});
+
+export const validateCandidateFinding = (data) => {
+  return CandidateFindingSchema.safeParse(data);
+};
+
+export const validateVerifiedFinding = (data) => {
+  return VerifiedFindingSchema.safeParse(data);
+};
