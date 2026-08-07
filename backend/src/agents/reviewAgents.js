@@ -724,6 +724,8 @@ export {
   calculateSeverityScore,
   formatMarkdownComment,
   selectModelTier,
+  generateAgentCompletion,
+  parseJsonFindings,
   SEVERITY_WEIGHTS,
   CATEGORY_META,
 };
